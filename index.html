@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.1/dist/maplibre-gl.css">
 <style>
-:root{--bg:#0a0a0b;--card:#141416;--card2:#1d1d21;--line:rgba(255,255,255,.07);--tx:#f4f4f5;--mut:#8e8e96;--acc:#ff6a2b;--acc2:#ff9a6b;--ok:#34d399;--warn:#fbbf24;--bad:#f87171;--blue:#60a5fa;--r:20px;--safe-b:env(safe-area-inset-bottom);--safe-t:env(safe-area-inset-top)}
+:root{--route:#5eead4;--bg:#0a0a0b;--card:#141416;--card2:#1d1d21;--line:rgba(255,255,255,.07);--tx:#f4f4f5;--mut:#8e8e96;--acc:#ff6a2b;--acc2:#ff9a6b;--ok:#34d399;--warn:#fbbf24;--bad:#f87171;--blue:#60a5fa;--r:20px;--safe-b:env(safe-area-inset-bottom);--safe-t:env(safe-area-inset-top)}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font:15px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",Segoe UI,Roboto,sans-serif;letter-spacing:-.01em;overscroll-behavior:none;-webkit-font-smoothing:antialiased}
 button,input,select,textarea{font:inherit;color:inherit;letter-spacing:inherit}
@@ -67,8 +67,12 @@ nav button.on{color:var(--tx);background:rgba(255,255,255,.07)}
 .mk.agent{width:30px;height:30px;background:#111;border:2px solid var(--blue)}
 .mk.home{width:16px;height:16px;background:var(--ok);border:3px solid #fff}
 .mk.fac{background:#2a2a30}
-.veh{width:34px;height:34px;border-radius:50%;background:var(--acc);display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 6px rgba(255,106,43,.22),0 6px 18px rgba(0,0,0,.4);cursor:pointer;color:#fff}
-.veh svg{width:19px;height:19px;fill:#fff;stroke:none}
+.veh{width:34px;height:34px;border-radius:50%;background:var(--route);display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 6px color-mix(in srgb,var(--route) 25%,transparent),0 6px 18px rgba(0,0,0,.4);cursor:pointer;color:#fff}
+.veh svg{width:19px;height:19px;fill:#04121f;stroke:none}
+.veh.onair{animation:livep 2s infinite}
+@keyframes livep{0%{box-shadow:0 0 0 0 rgba(94,234,212,.6)}70%{box-shadow:0 0 0 16px rgba(94,234,212,0)}100%{box-shadow:0 0 0 0 rgba(94,234,212,0)}}
+.veh.npc{width:28px;height:28px;background:rgba(255,255,255,.92);box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none}
+.veh.npc svg{width:16px;height:16px;fill:#0a0a0b}
 .veh.wait{background:#2a2a30;box-shadow:0 0 0 5px rgba(255,255,255,.08)}
 .vlab{position:absolute;top:38px;left:50%;transform:translateX(-50%);background:rgba(10,10,11,.8);color:#fff;font-size:10.5px;padding:2px 7px;border-radius:8px;white-space:nowrap;pointer-events:none;font-weight:500}
 .card{background:var(--card);border-radius:var(--r);padding:16px;margin:10px 0}
@@ -143,6 +147,7 @@ label.f{display:block;font-size:12.5px;color:var(--mut);margin:12px 2px 5px;font
 .sw span:before{content:"";position:absolute;width:22px;height:22px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
 .sw input:checked+span{background:var(--ok)}
 .sw input:checked+span:before{transform:translateX(18px)}
+input.mask{-webkit-text-security:disc}
 .maplibregl-ctrl-attrib{font-size:10px;background:rgba(255,255,255,.6)!important}
 .maplibregl-ctrl-bottom-right{bottom:calc(84px + var(--safe-b))}
 </style>
@@ -151,11 +156,17 @@ label.f{display:block;font-size:12.5px;color:var(--mut);margin:12px 2px 5px;font
 <div id="login" class="hide">
   <div class="logo"><img src="icon-192.png" alt="">Kargo</div>
   <p class="muted">Your China orders, agents, factories and parcels on one map.</p>
-  <input class="in" id="lEmail" type="text" placeholder="Username" autocomplete="username" autocapitalize="none" autocorrect="off" value="TomasCak">
-  <input class="in" id="lPass" type="password" placeholder="Password" autocomplete="current-password">
-  <button class="btn acc" id="lGo">Sign in</button>
-  <p class="small muted">You stay signed in on this device.</p>
-    <p class="small muted" id="lMsg"></p>
+  <div id="lStep1">
+  <input class="in mask" id="lEmail" type="text" placeholder="Username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false">
+  <input class="in" id="lPass" type="password" placeholder="Password" autocomplete="current-password" style="margin-top:10px">
+  <button class="btn acc" id="lGo" style="width:100%;margin-top:12px">Sign in</button>
+  </div>
+  <div id="lStep2" class="hide">
+  <p>Enter the 6-digit code from Google Authenticator</p>
+  <input class="in" id="lCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code" style="letter-spacing:.5em;font-size:26px;text-align:center;font-weight:600">
+  <button class="btn acc" id="lVerify" style="width:100%;margin-top:12px">Verify</button>
+  </div>
+  <p class="small muted" id="lMsg">You stay signed in on this device.</p>
 </div>
 
 <div id="app" class="hide">
@@ -174,6 +185,9 @@ label.f{display:block;font-size:12.5px;color:var(--mut);margin:12px 2px 5px;font
         <span class="pill" data-layer="ship">Parcels</span>
         <span class="pill" data-layer="sup">Factories</span>
         <span class="pill" data-layer="agent">Agents</span>
+        <span class="pill" data-layer="allFac">All factories</span>
+        <span class="sep"></span>
+        <span class="pill" id="planB" style="background:var(--acc);color:#fff;border-color:transparent">Plan shipment</span>
       </div>
     </section>
     <section class="view hide" id="v-ship"></section>

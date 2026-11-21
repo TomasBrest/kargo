@@ -123,9 +123,26 @@ export function planRoute(o, origin, home) {
     add(arc(hub, to, 10), 'truck')
   }
   stops.push({ ...to, n: home?.name ?? 'Home', k: 'home' })
-  return { coords, stops, segs }
+  return smooth({ coords, stops, segs })
 }
 
+// jemne zaoblí prestup (lietadlo pristane v Nemecku → kamión), trasa ostáva cez letisko
+function smooth(r) {
+  const c = r.coords
+  const d = (i, j) => dist({ lat: c[i][1], lng: c[i][0] }, { lat: c[j][1], lng: c[j][0] })
+  for (const sg of r.segs.slice(0, -1)) {
+    const J = sg.b
+    let i0 = J, acc = 0; while (i0 > 0 && acc < 70) { acc += d(i0 - 1, i0); i0-- }
+    let i1 = J; acc = 0; while (i1 < c.length - 1 && acc < 70) { acc += d(i1, i1 + 1); i1++ }
+    if (i1 - i0 < 2) continue
+    const P0 = c[i0], P1 = c[J], P2 = c[i1]
+    for (let i = i0 + 1; i < i1; i++) {
+      const t = (i - i0) / (i1 - i0), u = 1 - t
+      c[i] = [u * u * P0[0] + 2 * u * t * P1[0] + t * t * P2[0], u * u * P0[1] + 2 * u * t * P1[1] + t * t * P2[1]]
+    }
+  }
+  return r
+}
 function bearing(a, b) {
   const φ1 = a[1] * R, φ2 = b[1] * R, Δ = (b[0] - a[0]) * R
   return (Math.atan2(Math.sin(Δ) * Math.cos(φ2), Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δ)) / R + 360) % 360
@@ -208,4 +225,35 @@ export function eta(o, all) {
 export function findTracking(text) {
   const re = /\b(1Z[0-9A-Z]{16}|[A-Z]{2}\d{9}[A-Z]{2}|(?:YT|YW|LP|SF|JD|UB|LX|EB|CJ|CNG|TBA)\d{9,18}|\d{10,22})\b/g
   return [...new Set([...(text ?? '').matchAll(re)].map((m) => m[1]))]
+}
+
+// ---------- „NPC“ doprava na mape (len pre pocit, že to tečie) ----------
+export function npcRoutes() {
+  const rot = { lat: 51.95, lng: 4.05 }, ham = PORTS.HAMP, duis = { lat: 51.43, lng: 6.76 }, ba = { lat: 48.15, lng: 17.11 }
+  const air = planRoute({ mode: 'air', hub: 'LEJ' }, { lat: 22.64, lng: 113.81 }, ba)
+  const airSeg = air.segs.find((x) => x.k === 'air')
+  const air2 = planRoute({ mode: 'air', hub: 'FRA' }, { lat: 31.14, lng: 121.8 }, ba)
+  const air2Seg = air2.segs.find((x) => x.k === 'air')
+  const sea = planRoute({ mode: 'sea' }, { lat: 22.57, lng: 114.27 }, rot)
+  const seaSeg = sea.segs.find((x) => x.k === 'ship')
+  const rail = planRoute({ mode: 'rail' }, { lat: 34.27, lng: 108.94 }, duis)
+  const railSeg = rail.segs.find((x) => x.k === 'train')
+  return [
+    { k: 'air', coords: air.coords.slice(airSeg.a, airSeg.b + 1), sec: 48, off: 0 },
+    { k: 'air', coords: air2.coords.slice(air2Seg.a, air2Seg.b + 1), sec: 55, off: 0.5 },
+    { k: 'ship', coords: sea.coords.slice(seaSeg.a, seaSeg.b + 1), sec: 140, off: 0.35 },
+    { k: 'train', coords: rail.coords.slice(railSeg.a, railSeg.b + 1), sec: 90, off: 0.2 },
+    { k: 'truck', coords: arc(EU_HUBS.LEJ, ba, 30), sec: 22, off: 0 },
+    { k: 'truck', coords: arc(rot, duis, 10).concat(arc(duis, ba, 30).slice(1)), sec: 38, off: 0.6 },
+    { k: 'truck', coords: arc(ham, ba, 30), sec: 30, off: 0.3 },
+  ]
+}
+// bod na lomenej čiare podľa podielu dĺžky 0–1 (+ smer)
+export function pointAt(coords, f) {
+  if (!coords._len) { let L = 0; coords._cum = [0]; for (let i = 1; i < coords.length; i++) { L += dist({ lat: coords[i - 1][1], lng: coords[i - 1][0] }, { lat: coords[i][1], lng: coords[i][0] }); coords._cum.push(L) } coords._len = L }
+  const t = f * coords._len
+  let i = coords._cum.findIndex((c) => c >= t); if (i <= 0) i = 1
+  const a = coords[i - 1], b = coords[i], seg = coords._cum[i] - coords._cum[i - 1] || 1
+  const u = (t - coords._cum[i - 1]) / seg
+  return { lng: a[0] + (b[0] - a[0]) * u, lat: a[1] + (b[1] - a[1]) * u, brg: bearing(a, b) }
 }
