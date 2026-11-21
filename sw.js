@@ -1,6 +1,6 @@
 // Kargo service worker – rýchle načítanie + push notifikácie
-const VERSION = 'kargo-v8'
-const SHELL = ['./', 'index.html', 'app.js', 'geo.js', 'manifest.json', 'widget-template.js', 'icons/icon-192.png', 'icons/apple-touch-icon.png']
+const VERSION = 'kargo-v9'
+const SHELL = ['./', 'index.html', 'app.js', 'geo.js', 'manifest.json', 'widget-template.js', 'icon-192.png', 'apple-touch-icon.png']
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())) })
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim())) })
 self.addEventListener('fetch', (e) => {
@@ -18,7 +18,7 @@ self.addEventListener('fetch', (e) => {
 })
 self.addEventListener('push', (e) => {
   let d = {}; try { d = e.data.json() } catch (_) { d = { title: 'Kargo', body: e.data?.text() ?? '' } }
-  e.waitUntil(self.registration.showNotification(d.title || 'Kargo', { body: d.body || '', icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', data: { url: d.url || './' } }))
+  e.waitUntil(self.registration.showNotification(d.title || 'Kargo', { body: d.body || '', icon: 'icon-192.png', badge: 'icon-192.png', data: { url: d.url || './' } }))
 })
 self.addEventListener('notificationclick', (e) => {
   e.notification.close()
