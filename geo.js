@@ -248,6 +248,10 @@ export function npcRoutes() {
     { k: 'truck', coords: arc(ham, ba, 30), sec: 30, off: 0.3 },
   ]
 }
+// reálne rýchlosti NPC (km/h): lietadlo ~850, kontajnerová loď ~18 uzlov, vlak Čína–EÚ ~45 vrátane zastávok, kamión ~70
+const NPC_KMH = { air: 850, ship: 33, train: 45, truck: 70 }
+export function npcDuration(r) { pointAt(r.coords, 0); return (r.coords._len / NPC_KMH[r.k]) * 3600 }
+export function brgOf(a, b) { return bearing(a, b) }
 // bod na lomenej čiare podľa podielu dĺžky 0–1 (+ smer)
 export function pointAt(coords, f) {
   if (!coords._len) { let L = 0; coords._cum = [0]; for (let i = 1; i < coords.length; i++) { L += dist({ lat: coords[i - 1][1], lng: coords[i - 1][0] }, { lat: coords[i][1], lng: coords[i][0] }); coords._cum.push(L) } coords._len = L }

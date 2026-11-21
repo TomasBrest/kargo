@@ -111,7 +111,7 @@ async function loadAll() {
   const [o, p, t, d, q, a, rq, md] = await Promise.all([
     sb.from('kargo_orders').select('*').order('created_at', { ascending: false }),
     sb.from('kargo_places').select('*').order('name'),
-    sb.from('kargo_threads').select('id,ext_id,partner,company,kind,place_id,archived,last_at,last_text,last_from_me,summary').order('last_at', { ascending: false }),
+    sb.from('kargo_threads').select('id,ext_id,partner,company,kind,place_id,archived,last_at,last_text,last_from_me,summary,avatar,state,next_step,open_items').order('last_at', { ascending: false }).then((r) => r.error ? sb.from('kargo_threads').select('id,ext_id,partner,company,kind,place_id,archived,last_at,last_text,last_from_me,summary').order('last_at', { ascending: false }) : r),
     sb.from('kargo_drafts').select('*').order('created_at', { ascending: false }).limit(60),
     sb.from('kargo_quotes').select('*').order('created_at', { ascending: false }).limit(20),
     sb.from('kargo_agent').select('*').maybeSingle(),
@@ -142,6 +142,15 @@ function realtime() {
 }
 const placeById = (id) => S.places.find((p) => p.id === id)
 const active = (o) => !o.archived && (o.stage ?? 1) < 7
+// fotka produktu: objednávka → fotky z fabriky → produkt fabriky
+function photoOf(o) { return o.image_url || S.media.find((m) => m.order_id === o.id && m.kind !== 'video')?.url || S.media.find((m) => m.place_id === o.supplier_id && m.kind !== 'video')?.url || placeById(o.supplier_id)?.image_url || null }
+function avatarOf(t, p) { return t?.avatar || p?.avatar || (t?.place_id ? placeById(t.place_id)?.avatar : null) || null }
+function face(url, name, size = 44) { return `<div class="face" style="width:${size}px;height:${size}px;${url ? `background-image:url('${esc(url)}')` : ''}">${url ? '' : esc((name ?? '?').trim().slice(0, 1).toUpperCase())}</div>` }
+async function haveInvoice(oid) {
+  await sb.from('kargo_orders').update({ invoice_status: 'received' }).eq('id', oid)
+  await sb.from('kargo_drafts').update({ status: 'rejected', note: 'invoice already received' }).eq('order_id', oid).eq('status', 'pending').in('kind', ['invoice', 'invoice_reminder'])
+  toast('Marked – invoice received ✅'); await loadAll()
+}
 
 function renderAll() { renderBadge(); renderAgentPill(); if (S.map) drawMap(); renderShip(); if (S.tab === 'msg') renderMsg(); if (S.tab === 'agent') renderAgent() }
 function renderBadge() { const n = S.drafts.filter((d) => d.status === 'pending').length; $('#badge').textContent = n; $('#badge').classList.toggle('hide', !n) }
@@ -153,7 +162,7 @@ function renderAgentPill() {
 $('#agentPill').onclick = () => go('agent')
 
 // ================= TABY =================
-const TITLES = { map: 'Map', ship: 'Shipments', src: 'Sourcing', msg: 'Approve', agent: 'Agent' }
+const TITLES = { map: 'Map', ship: 'Shipments', src: 'Sourcing', msg: 'Chats', agent: 'Agent' }
 function go(tab) {
   if (S.tab === 'agent' && tab !== 'agent') setLive(false)
   S.tab = tab
@@ -284,22 +293,29 @@ function startNpc(ships) {
     const el = document.createElement('div')
     el.className = 'veh npc'
     el.innerHTML = ICO[r.k === 'air' ? 'air' : r.k]
-    const mk = new maplibregl.Marker({ element: el, rotationAlignment: r.k === 'air' ? 'map' : 'viewport' }).setLngLat(r.coords[0]).addTo(m)
-    S.npc.push({ m: mk, r })
+    const mk = new maplibregl.Marker({ element: el, rotationAlignment: r.k === 'air' ? 'map' : 'viewport', subpixelPositioning: true }).setLngLat(r.coords[0]).addTo(m)
+    S.npc.push({ m: mk, r, dur: G.npcDuration(r) })
     feats.push({ type: 'Feature', properties: { k: 'npc' }, geometry: { type: 'LineString', coordinates: r.coords } })
   }
   if (m.getSource('npc')) m.getSource('npc').setData({ type: 'FeatureCollection', features: feats })
-  const t0 = performance.now()
+  // reálna rýchlosť: poloha podľa skutočného času (rovnaká po každom otvorení), plynulý pohyb bez skokov
   let last = 0
   const tick = (now) => {
     S.npcRaf = requestAnimationFrame(tick)
-    if (now - last < 40 || S.tab !== 'map') return
+    if (now - last < 100 || S.tab !== 'map' || document.hidden) return
     last = now
+    const sec = Date.now() / 1000
     for (const n of S.npc) {
-      const f = (((now - t0) / 1000 / n.r.sec) + n.r.off) % 1
+      const f = (sec / n.dur + n.r.off) % 1
       const p = G.pointAt(n.r.coords, f)
       n.m.setLngLat([p.lng, p.lat])
-      if (n.r.k === 'air') n.m.setRotation(p.brg)
+      if (n.r.k === 'air') {
+        const q = G.pointAt(n.r.coords, Math.min(0.9999, f + 0.01))
+        const target = f > 0.989 ? p.brg : G.brgOf([p.lng, p.lat], [q.lng, q.lat])
+        const cur = n.rot ?? target
+        n.rot = cur + ((((target - cur) % 360) + 540) % 360 - 180) * 0.15
+        n.m.setRotation(n.rot)
+      }
     }
   }
   S.npcRaf = requestAnimationFrame(tick)
@@ -431,6 +447,8 @@ function renderSearch(v) {
   $$('[data-o]', v).forEach((c) => (c.onclick = () => openOrder(c.dataset.o)))
   $$('[data-p]', v).forEach((c) => (c.onclick = () => openPlace(c.dataset.p)))
   $$('[data-th]', v).forEach((c) => (c.onclick = () => openThread(c.dataset.th)))
+  $$('[data-have]', v).forEach((bt) => (bt.onclick = async () => { await haveInvoice(bt.dataset.have); renderMsg() }))
+  if ($('#doneT', v)) $('#doneT', v).onclick = () => { S.showDone = !S.showDone; renderMsg() }
 }
 async function uploadFiles(files, prefix) {
   const out = []
@@ -523,7 +541,7 @@ function orderCard(o) {
   const e = G.eta(o, S.orders)
   const sup = placeById(o.supplier_id) ?? placeById(o.agent_id)
   return `<div class="card ord" data-o="${o.id}">
-    <div class="ph" style="${o.image_url ? `background-image:url('${esc(o.image_url)}')` : ''}">${o.image_url ? '' : ICO.fac}</div>
+    ${(() => { const ph = photoOf(o); return `<div class="ph" style="${ph ? `background-image:url('${esc(ph)}')` : ''}">${ph ? '' : ICO.fac}</div>` })()}
     <div class="bd"><div class="t">${esc(o.title)}</div>
       <div class="s">${G.STAGES[o.stage ?? 1]} · ${G.MODES[o.mode] ?? ''}${sup ? ' · ' + esc(sup.name) : o.supplier ? ' · ' + esc(o.supplier) : ''}</div>
       <div class="s">${last ? esc(last.d) + (last.loc ? ' · ' + esc(last.loc) : '') + ' · ' + ago(last.t) : o.tracking_no ? esc(o.tracking_no) : o.qty ? esc(o.qty) + (o.price ? ' · ' + money(o.price, o.currency) : '') : ''}</div>
@@ -533,8 +551,8 @@ function orderCard(o) {
 }
 function placeCard(p) {
   const n = S.orders.filter((o) => o.supplier_id === p.id || o.agent_id === p.id).length
-  const img = p.image_url ?? S.orders.find((o) => o.supplier_id === p.id && o.image_url)?.image_url
-  return `<div class="card ord" data-p="${p.id}"><div class="ph" style="${img ? `background-image:url('${esc(img)}')` : ''}">${img ? '' : p.kind === 'agent' ? ICO.agent : ICO.fac}</div>
+  const img = p.kind === 'agent' ? p.avatar ?? p.image_url : p.image_url ?? S.orders.find((o) => o.supplier_id === p.id && o.image_url)?.image_url ?? p.avatar
+  return `<div class="card ord" data-p="${p.id}"><div class="ph${p.kind === 'agent' && p.avatar ? ' round' : ''}" style="${img ? `background-image:url('${esc(img)}')` : ''}">${img ? '' : p.kind === 'agent' ? ICO.agent : ICO.fac}</div>
   <div class="bd"><div class="t">${p.vetting?.verdict ? `<span style="color:${{ green: 'var(--ok)', yellow: 'var(--warn)', red: 'var(--bad)' }[p.vetting.verdict]}">●</span> ` : ''}${esc(p.name)}</div><div class="s">${p.kind === 'agent' ? 'Shipping agent' : p.kind === 'warehouse' ? 'Warehouse' : 'Factory'} · ${esc(p.city ?? '')}${p.lat == null ? ' · no location' : ''}</div><div class="s">${n ? n + '× order' : ''}</div></div></div>`
 }
 
@@ -546,14 +564,14 @@ function openOrder(id) {
   const e = G.eta(o, S.orders)
   const g = shipGeo(o)
   sheet(`
-  ${o.image_url ? `<div class="hero" style="background-image:url('${esc(o.image_url)}')"></div>` : ''}
+  ${photoOf(o) ? `<div class="hero" style="background-image:url('${esc(photoOf(o))}')"></div>` : ''}
   <h2 style="margin:4px 0">${esc(o.title)}</h2>
   <div class="muted small">${o.order_kind === 'shipping' ? 'Shipping service' : 'Goods'}${o.alibaba_no ? ' · Alibaba #' + esc(o.alibaba_no) : ''}${o.ordered_at ? ' · ' + fmtD(o.ordered_at) : ''}</div>
   ${prog(o.stage ?? 1)}
   <div class="row small" style="margin-top:4px"><b>${G.STAGES[o.stage ?? 1]}</b><span class="muted" style="text-align:right">${g.pos.how === 'live' ? '<b style="color:var(--route)">● LIVE</b> ' : ''}${esc(g.pos.label ?? '')} ${g.pos.how === 'estimate' ? '(estimate)' : ''}</span></div>
   ${e && active(o) ? `<div class="card" style="margin-top:10px"><b>Arrives ~${new Date(e.d).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'numeric' })}</b><div class="small muted">${esc(e.how)}${e.avg ? ' · avg ' + e.avg + ' days' : ''}</div></div>` : ''}
   ${(() => { const L = landed(o); return L ? `<div class="card" style="margin-top:10px"><b>${L.per ? usd(L.per) + ' per piece' : usd(L.total) + ' total'}</b> <span class="small muted">≈ ${eur(L.total * RATES.USD)} total</span><div class="small muted">goods ${usd(L.goods)} + shipping ${usd(L.ship)}${L.pcs ? ` · ${L.pcs} pcs · total ${usd(L.total)}` : ''}${L.ship ? '' : ' · add shipping cost in Edit'}${RATES.approx ? ' · approx. € rate' : ' · € at ECB rate ' + (RATES.date ?? '')}</div></div>` : '' })()}
-  ${o.order_kind !== 'shipping' ? `<div class="card small" style="display:flex;align-items:center;gap:10px"><span style="flex:1">Invoice: <b>${{ none: o.paid ? 'not requested' : 'after payment', ask: 'agent will request', requested: 'requested ' + ago(o.invoice_requested_at), received: 'received ✅' }[o.invoice_status ?? 'none'] ?? o.invoice_status}</b>${o.invoice_sent_at ? `<div class="small muted">emailed to ${esc(o.invoice_sent_to ?? '')} · ${fmtD(o.invoice_sent_at)}</div>` : ''}</span>${o.invoice_url ? `<a class="btn sm ghost" target="_blank" href="${esc(o.invoice_url)}">Open</a>` : ''}${o.invoice_status === 'received' && !o.invoice_sent_at && S.agent?.company?.accountant_email ? `<a class="btn sm" href="mailto:${esc(S.agent.company.accountant_email)}?subject=${encodeURIComponent('Faktúra – ' + (placeById(o.supplier_id)?.name ?? o.supplier ?? '') + ' – ' + o.title)}&body=${encodeURIComponent('Dobrý deň,\n\nposielam faktúru k objednávke ' + o.title + (o.alibaba_no ? ' (Alibaba ' + o.alibaba_no + ')' : '') + ':\n' + (o.invoice_url ?? '') + '\n\nĎakujem')}">Email</a>` : ''}${o.invoice_status !== 'received' ? `<button class="btn sm" id="oInv">${o.invoice_status === 'requested' ? 'Remind' : 'Request'}</button>` : ''}</div>` : ''}
+  ${o.order_kind !== 'shipping' ? `<div class="card small" style="display:flex;align-items:center;gap:10px"><span style="flex:1">Invoice: <b>${{ none: o.paid ? 'not requested' : 'after payment', ask: 'agent will request', requested: 'requested ' + ago(o.invoice_requested_at), received: 'received ✅' }[o.invoice_status ?? 'none'] ?? o.invoice_status}</b>${o.invoice_sent_at ? `<div class="small muted">emailed to ${esc(o.invoice_sent_to ?? '')} · ${fmtD(o.invoice_sent_at)}</div>` : ''}</span>${o.invoice_url ? `<a class="btn sm ghost" target="_blank" href="${esc(o.invoice_url)}">Open</a>` : ''}${o.invoice_status === 'received' && !o.invoice_sent_at && S.agent?.company?.accountant_email ? `<a class="btn sm" href="mailto:${esc(S.agent.company.accountant_email)}?subject=${encodeURIComponent('Faktúra – ' + (placeById(o.supplier_id)?.name ?? o.supplier ?? '') + ' – ' + o.title)}&body=${encodeURIComponent('Dobrý deň,\n\nposielam faktúru k objednávke ' + o.title + (o.alibaba_no ? ' (Alibaba ' + o.alibaba_no + ')' : '') + ':\n' + (o.invoice_url ?? '') + '\n\nĎakujem')}">Email</a>` : ''}${o.invoice_status !== 'received' ? `<button class="btn sm ghost" id="oHave">I have it</button><button class="btn sm" id="oInv">${o.invoice_status === 'requested' ? 'Remind' : 'Request'}</button>` : ''}</div>` : ''}
   <dl class="kv" style="margin-top:12px">
     ${sup ? `<dt>Factory</dt><dd><a href="#" data-pl="${sup.id}">${esc(sup.name)}</a></dd>` : o.supplier ? `<dt>Supplier</dt><dd>${esc(o.supplier)}</dd>` : ''}
     ${ag ? `<dt>Agent</dt><dd><a href="#" data-pl="${ag.id}">${esc(ag.name)}</a></dd>` : ''}
@@ -587,6 +605,7 @@ function openOrder(id) {
     if ($('#oRef', b)) $('#oRef', b).onclick = async (e) => { e.target.textContent = '⏳'; try { const r = await fn({ action: 'refresh', ids: [o.id] }); toast(r.errors?.length ? '⚠️ ' + r.errors[0] : 'Updated ✅', 4000); await loadAll(); openOrder(o.id) } catch (err) { toast('❌ ' + err.message, 5000); e.target.textContent = 'Refresh tracking' } }
     $('#oEdit', b).onclick = () => openAdd(null, o)
     if ($('#oRe', b)) $('#oRe', b).onclick = () => reorder(o)
+    if ($('#oHave', b)) $('#oHave', b).onclick = async () => { await haveInvoice(o.id); openOrder(o.id) }
     if ($('#oInv', b)) $('#oInv', b).onclick = async () => {
       if (!S.agent?.company?.name) { toast('Fill in your company details first (Agent → Company details)', 4000); return openCompany() }
       await sb.from('kargo_orders').update({ invoice_status: 'ask', paid: true }).eq('id', o.id); toast('The agent will draft the invoice request for approval'); await loadAll(); openOrder(o.id)
@@ -805,20 +824,21 @@ function renderMsg() {
   ${!agentOnline() ? `<div class="card small" style="border-color:#6b5a1a">The PC Agent is offline – no new drafts, and approved messages wait until it’s back.</div>` : ''}
   <div class="sec"><span>Waiting for you (${pend.length})</span>${pend.filter((d) => d.quote_id).length > 1 ? '<button class="btn sm ok" id="allQ">Approve all quotes</button>' : ''}</div>
   ${pend.map(draftCard).join('') || '<div class="empty"><b>✅</b>All clear. When someone writes, the agent drafts a reply and you get a push.</div>'}
+  ${activeChats()}
   ${(() => { const au = S.drafts.filter((d) => d.auto && Date.now() - new Date(d.created_at) < 864e5); return au.length ? `<div class="sec"><span>Autopilot · last 24 h (${au.length})</span></div><div class="card" style="padding:6px 16px">${au.map((d) => `<div style="padding:9px 0;border-bottom:1px solid var(--line)"><div class="row small"><b style="flex:3">${esc(d.to_name ?? '')}</b><span class="muted" style="text-align:right">${d.status === 'sent' ? 'sent ' + ago(d.sent_at) : d.status === 'failed' ? 'failed' : 'sending…'}</span></div><div class="small muted" style="margin-top:2px">${esc(d.text.slice(0, 140))}</div></div>`).join('')}</div>` : '' })()}
   ${recent.length ? `<div class="sec"><span>Recent</span></div>${recent.map((d) => `<div class="card small"><b>${{ approved: 'Queued', sending: 'Sending', sent: 'Sent', failed: 'Failed', revise: 'Rewriting' }[d.status]}</b> · ${esc(d.to_name ?? '')} <span class="muted">${ago(d.sent_at ?? d.decided_at ?? d.created_at)}</span><div class="muted" style="margin-top:4px">${esc(d.text.slice(0, 140))}</div>${d.error ? `<div style="color:var(--bad)">${esc(d.error)}</div><button class="btn sm ghost" data-retry="${d.id}" style="margin-top:6px">Retry</button>` : ''}</div>`).join('')}` : ''}
   <div class="sec"><span>Agent quotes</span><button class="btn sm" id="newQ">Ask 3 agents</button></div>
   ${S.quotes.filter((q) => q.status !== 'cancelled').slice(0, 5).map(quoteCard).join('') || '<div class="muted small">Enter weight and size – the agent asks three agents the same question and compares the prices.</div>'}
-  <div class="sec"><span>Alibaba conversations</span></div>
+  <div class="sec"><span>All conversations</span></div>
   <div class="chips">${Object.entries(K).map(([k, n]) => `<span class="chip ${S.tfilt === k ? 'on' : ''}" data-tf="${k}">${n} ${S.threads.filter((t) => t.kind === k || (k === 'other' && t.kind === 'unknown')).length}</span>`).join('')}</div>
-  ${th.slice(0, 80).map((t) => `<div class="card ord" data-th="${t.id}"><div class="ph">${t.kind === 'agent' ? '🚚' : t.kind === 'supplier' ? '🏭' : '💬'}</div><div class="bd"><div class="t">${esc(t.company || t.partner || 'Conversation')}${t.archived ? ' <span class="muted small">archived</span>' : ''}</div><div class="s">${esc(t.summary ?? '')}</div><div class="s">${t.last_from_me ? 'Ty: ' : ''}${esc((t.last_text ?? '').slice(0, 90))}</div></div></div>`).join('') || `<div class="muted small">${S.threads.length ? 'Nothing here.' : 'The PC Agent will load your conversations.'}</div>`}`
+  ${th.slice(0, 80).map((t) => `<div class="card ord" data-th="${t.id}">${face(avatarOf(t), t.company || t.partner, 48)}<div class="bd"><div class="t">${esc(t.company || t.partner || 'Conversation')}${t.archived ? ' <span class="muted small">archived</span>' : ''}</div><div class="s">${esc(t.summary ?? '')}</div><div class="s">${t.last_from_me ? 'Ty: ' : ''}${esc((t.last_text ?? '').slice(0, 90))}</div></div></div>`).join('') || `<div class="muted small">${S.threads.length ? 'Nothing here.' : 'The PC Agent will load your conversations.'}</div>`}`
   $$('[data-tf]', v).forEach((c) => (c.onclick = () => { S.tfilt = c.dataset.tf; renderMsg() }))
   $$('[data-th]', v).forEach((c) => (c.onclick = () => openThread(c.dataset.th)))
   $$('[data-ok]', v).forEach((bt) => (bt.onclick = () => decide(bt.dataset.ok, 'approved')))
   $$('[data-no]', v).forEach((bt) => (bt.onclick = () => decide(bt.dataset.no, 'rejected')))
   $$('[data-rv]', v).forEach((bt) => (bt.onclick = () => revise(bt.dataset.rv, !!bt.dataset.ph)))
   $$('[data-ign]', v).forEach((bt) => (bt.onclick = async () => { const d = S.drafts.find((x) => x.id === bt.dataset.ign); await sb.from('kargo_threads').update({ kind: 'cold' }).eq('id', d.thread_id); await decide(d.id, 'rejected', true); toast('Chat ignored – no more drafts from it') }))
-  $$('#v-msg [data-o]').forEach((c) => (c.onclick = () => openOrder(c.dataset.o)))
+  $$('#v-msg [data-o]').forEach((c) => (c.onclick = (e) => { e.stopPropagation(); openOrder(c.dataset.o) }))
   const need = [...new Set(pend.map((d) => d.thread_id).filter((id) => id && !(S.msgs ?? {})[id]))]
   if (need.length) sb.from('kargo_threads').select('id,messages').in('id', need).then(({ data }) => { S.msgs = S.msgs ?? {}; for (const r of data ?? []) S.msgs[r.id] = r.messages ?? []; renderMsg() })
   $$('[data-retry]', v).forEach((bt) => (bt.onclick = () => decide(bt.dataset.retry, 'approved')))
@@ -827,6 +847,37 @@ function renderMsg() {
   if ($('#allQ', v)) $('#allQ', v).onclick = async () => { for (const d of pend.filter((d) => d.quote_id)) await decide(d.id, 'approved', true); toast('Approved – the agent will send them'); pollLight() }
   $('#newQ', v).onclick = () => newQuote()
 }
+// aktívne chaty: kto je na ťahu, čo je otvorené, ako ďaleko je objednávka
+function activeChats() {
+  const pend = new Map()
+  for (const d of S.drafts.filter((d) => d.status === 'pending')) pend.set(d.thread_id, (pend.get(d.thread_id) ?? 0) + 1)
+  const ordsOf = (t) => (t.place_id ? S.orders.filter((o) => active(o) && (o.supplier_id === t.place_id || o.agent_id === t.place_id)) : [])
+  const stOf = (t) => t.state ?? (t.last_from_me == null ? null : t.last_from_me ? 'them' : 'you')
+  const list = S.threads.filter((t) => !t.archived && t.kind !== 'cold' && (ordsOf(t).length || pend.has(t.id) || (t.state && t.state !== 'done') || (!t.state && t.kind === 'agent')))
+  if (!list.length) return ''
+  const rank = { you: 0, them: 1, done: 2 }
+  list.sort((a, b) => (pend.has(b.id) - pend.has(a.id)) || ((rank[stOf(a)] ?? 1) - (rank[stOf(b)] ?? 1)) || String(b.last_at).localeCompare(String(a.last_at)))
+  const open = list.filter((t) => stOf(t) !== 'done' || pend.has(t.id)), done = list.filter((t) => !open.includes(t))
+  const L = { you: ['Your move', 'warn'], them: ['Waiting on them', ''], done: ['Done', 'ok'] }
+  const card = (t) => {
+    const os = ordsOf(t), st = stOf(t), lab = L[st]
+    return `<div class="card chat" data-th="${t.id}">
+      <div class="row" style="gap:12px;justify-content:flex-start;align-items:flex-start">
+        ${face(avatarOf(t), t.company || t.partner, 46)}
+        <div style="flex:1;min-width:0">
+          <div class="row" style="gap:6px"><b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.partner && t.company && t.kind === 'agent' ? t.partner : t.company || t.partner || 'Chat')}</b>${pend.has(t.id) ? `<span class="tag acc" style="flex:none">${pend.get(t.id)} to approve</span>` : lab ? `<span class="tag ${lab[1]}" style="flex:none">${lab[0]}</span>` : ''}</div>
+          <div class="small muted">${t.kind === 'agent' ? 'Shipping agent' + (t.company && t.partner ? ' · ' + esc(t.company) : '') : t.kind === 'supplier' ? 'Factory' : 'Chat'} · ${ago(t.last_at)}</div>
+          ${t.next_step ? `<div class="small" style="margin-top:6px">→ ${esc(t.next_step)}</div>` : t.last_text ? `<div class="small muted" style="margin-top:6px">${t.last_from_me ? 'You: ' : ''}${esc(t.last_text.slice(0, 110))}</div>` : ''}
+          ${(t.open_items ?? []).length ? `<div class="open">${t.open_items.map((x) => `<div>○ ${esc(x)}</div>`).join('')}</div>` : ''}
+        </div>
+      </div>
+      ${os.length ? `<div class="chatords">${os.slice(0, 4).map((o) => { const ph = photoOf(o); return `<div class="co" data-o="${o.id}"><div class="cph" style="${ph ? `background-image:url('${esc(ph)}')` : ''}">${ph ? '' : ICO.fac}</div><div style="flex:1;min-width:0"><div class="small" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><b>${esc(o.title)}</b></div><div class="small muted">${G.STAGES[o.stage ?? 1]}${o.paid && o.order_kind !== 'shipping' && o.invoice_status !== 'received' ? ' · no invoice' : ''}</div>${prog(o.stage ?? 1)}</div></div>` }).join('')}</div>` : ''}
+    </div>`
+  }
+  return `<div class="sec"><span>Active chats (${open.length})</span><span class="small muted" style="flex:none">${open.filter((t) => stOf(t) === 'you').length} your move</span></div>
+  ${open.map(card).join('') || '<div class="muted small">Nothing open 🎉</div>'}
+  ${done.length ? `<button class="btn ghost sm" id="doneT" style="width:100%;margin-top:6px">${S.showDone ? 'Hide' : 'Show'} finished (${done.length})</button>${S.showDone ? done.map(card).join('') : ''}` : ''}`
+}
 function draftCard(d) {
   const t = S.threads.find((x) => x.id === d.thread_id)
   const msgs = (S.msgs?.[d.thread_id] ?? []).filter((m) => m.side !== 's').slice(-6)
@@ -834,7 +885,7 @@ function draftCard(d) {
   const photos = d.kind === 'photos' && (d.images ?? []).length
   const icon = ''
   return `<div class="card draft">
-    <div class="row"><div style="flex:3"><b>${esc(d.to_name ?? t?.company ?? '')}</b> ${{ photos: '<span class="tag acc">photos</span>', ready: '<span class="tag acc">goods ready</span>', invoice: '<span class="tag">invoice</span>', invoice_reminder: '<span class="tag">invoice</span>', reorder: '<span class="tag">reorder</span>', complaint: '<span class="tag warn">complaint</span>', rfq: '<span class="tag">new supplier</span>' }[d.kind] ?? ''}</div><span class="muted small" style="text-align:right">${d.channel === 'whatsapp' ? 'WhatsApp · ' : ''}${ago(d.created_at)}</span></div>
+    <div class="row" style="gap:10px;justify-content:flex-start">${face(avatarOf(t), d.to_name ?? t?.company, 34)}<div style="flex:3"><b>${esc(d.to_name ?? t?.company ?? '')}</b> ${{ photos: '<span class="tag acc">photos</span>', ready: '<span class="tag acc">goods ready</span>', invoice: '<span class="tag">invoice</span>', invoice_reminder: '<span class="tag">invoice</span>', reorder: '<span class="tag">reorder</span>', complaint: '<span class="tag warn">complaint</span>', rfq: '<span class="tag">new supplier</span>' }[d.kind] ?? ''}</div><span class="muted small" style="text-align:right">${d.channel === 'whatsapp' ? 'WhatsApp · ' : ''}${ago(d.created_at)}</span></div>
     ${d.reason ? `<div class="why">${esc(d.reason)}</div>` : ''}
     ${ord ? `<div class="row small" style="margin-top:8px;gap:8px;justify-content:flex-start;cursor:pointer" data-o="${ord.id}"><div style="width:30px;height:30px;border-radius:8px;flex:none;background:var(--card2) ${ord.image_url ? `url('${esc(ord.image_url)}') center/cover` : ''}"></div><span>Order: <b>${esc(ord.title)}</b></span></div>` : t?.place_id ? '' : '<div class="small muted" style="margin-top:6px">Not linked to an active order</div>'}
     ${msgs.length ? `<div style="margin:10px 0;max-height:260px;overflow:auto;background:var(--bg);border-radius:14px;padding:6px 10px">${msgs.map((m) => `<div class="bub ${m.side}" style="font-size:13px">${esc((m.text ?? '').slice(0, 400))}${(m.imgs ?? []).length ? ' 📷' : ''}</div>`).join('')}</div>` : ''}
@@ -842,7 +893,7 @@ function draftCard(d) {
     <textarea id="dt-${d.id}">${esc(d.text)}</textarea>
     <div class="row" style="margin-top:8px">
       <button class="btn bad sm" data-no="${d.id}" style="flex:.7">✕</button>
-      ${t ? `<button class="btn ghost sm" data-ign="${d.id}" title="Ignore this chat">Ignore chat</button>` : ''}
+      ${/^invoice/.test(d.kind ?? '') && d.order_id ? `<button class="btn ghost sm" data-have="${d.order_id}">Already have it</button>` : t ? `<button class="btn ghost sm" data-ign="${d.id}" title="Ignore this chat">Ignore chat</button>` : ''}
       <button class="btn ghost sm" data-rv="${d.id}" data-ph="${photos ? 1 : ''}">${photos ? 'Problem' : 'Rewrite'}</button>
       <button class="btn ok" data-ok="${d.id}" style="flex:1.4">${photos ? 'OK, ship it' : 'Send'}</button>
     </div>
@@ -906,7 +957,8 @@ async function pickWinner(qid, pid) {
 async function openThread(id) {
   const { data: t } = await sb.from('kargo_threads').select('*').eq('id', id).single()
   if (!t) return
-  sheet(`<h2 style="margin:4px 0">${esc(t.company || t.partner)}</h2><div class="muted small">${esc(t.partner ?? '')} · ${{ supplier: 'supplier', agent: 'agent', cold: 'cold outreach', other: 'other', unknown: '?' }[t.kind]}${t.archived ? ' · archived' : ''}</div>
+  sheet(`<div class="row" style="gap:12px;justify-content:flex-start">${face(avatarOf(t), t.company || t.partner, 56)}<div style="flex:1"><h2 style="margin:4px 0">${esc(t.company || t.partner)}</h2></div></div>
+  ${t.next_step || (t.open_items ?? []).length ? `<div class="card small">${t.next_step ? `<b>→ ${esc(t.next_step)}</b>` : ''}${(t.open_items ?? []).length ? `<div class="open">${t.open_items.map((x) => `<div>○ ${esc(x)}</div>`).join('')}</div>` : ''}</div>` : ''}<div class="muted small">${esc(t.partner ?? '')} · ${{ supplier: 'supplier', agent: 'agent', cold: 'cold outreach', other: 'other', unknown: '?' }[t.kind]}${t.archived ? ' · archived' : ''}</div>
   ${t.summary ? `<div class="card small">🧠 ${esc(t.summary)}</div>` : ''}
   <div style="margin-top:8px">${(t.messages ?? []).slice(-40).map((m) => `<div class="bub ${m.side}">${esc(m.text)}</div>`).join('')}</div>
   <div class="sec"><span>Write (the agent sends it)</span></div>
