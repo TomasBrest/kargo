@@ -143,7 +143,7 @@ function realtime() {
 const placeById = (id) => S.places.find((p) => p.id === id)
 const active = (o) => !o.archived && (o.stage ?? 1) < 7
 // fotka produktu: objednávka → fotky z fabriky → produkt fabriky
-function photoOf(o) { return o.image_url || S.media.find((m) => m.order_id === o.id && m.kind !== 'video')?.url || S.media.find((m) => m.place_id === o.supplier_id && m.kind !== 'video')?.url || placeById(o.supplier_id)?.image_url || null }
+function photoOf(o) { return S.media.find((m) => m.order_id === o.id && m.kind !== 'video')?.url || (o.image_src === 'chat' && o.image_url) || S.media.find((m) => m.place_id === o.supplier_id && m.kind !== 'video' && !m.order_id)?.url || o.image_url || placeById(o.supplier_id)?.image_url || null }
 function avatarOf(t, p) { return t?.avatar || p?.avatar || (t?.place_id ? placeById(t.place_id)?.avatar : null) || null }
 function face(url, name, size = 44) { return `<div class="face" style="width:${size}px;height:${size}px;${url ? `background-image:url('${esc(url)}')` : ''}">${url ? '' : esc((name ?? '?').trim().slice(0, 1).toUpperCase())}</div>` }
 async function haveInvoice(oid) {
@@ -257,9 +257,11 @@ function drawMap() {
     if (p.lat == null) continue
     if (p.kind === 'supplier' && !S.layers.allFac && !activeSup.has(p.id)) continue
     if (p.kind === 'home') { const el = document.createElement('div'); el.className = 'mk home'; add(el, p.lat, p.lng, () => openPlace(p.id)); continue }
-    if (p.kind === 'agent' || p.kind === 'warehouse') { if (!S.layers.agent) continue; const el = document.createElement('div'); el.className = 'mk agent'; el.innerHTML = ICO.agent; add(el, p.lat, p.lng, () => openPlace(p.id)); continue }
+    if (p.kind === 'agent' || p.kind === 'warehouse') { if (!S.layers.agent) continue; const el = document.createElement('div'); el.className = 'mk agent' + (p.avatar ? ' face' : ''); if (p.avatar) el.style.backgroundImage = `url("${p.avatar}")`; else el.innerHTML = ICO.agent; add(el, p.lat, p.lng, () => openPlace(p.id)); continue }
     if (!S.layers.sup) continue
-    const img = p.image_url ?? S.orders.find((o) => o.supplier_id === p.id && o.image_url)?.image_url
+    // skutočná fotka produktu, ktorú ti fabrika poslala do chatu
+    const ao = S.orders.filter((o) => active(o) && o.supplier_id === p.id)
+    const img = ao.map(photoOf).find(Boolean) ?? S.orders.filter((o) => o.supplier_id === p.id).map(photoOf).find(Boolean) ?? p.image_url
     const el = document.createElement('div'); el.className = 'mk' + (img ? '' : ' fac')
     if (img) el.style.backgroundImage = `url("${img}")`; else el.innerHTML = ICO.fac
     add(el, p.lat, p.lng, () => openPlace(p.id))
@@ -340,7 +342,7 @@ function renderShip() {
   <div class="stats">
     <div class="stat"><b>${os.filter(active).length}</b><small>active</small></div>
     <div class="stat"><b>${os.filter((o) => active(o) && o.stage >= 4).length}</b><small>in transit</small></div>
-    <div class="stat"><b>${spent ? usd(spent) : '–'}</b><small>this month</small></div>
+    ${(() => { const y = String(new Date().getFullYear()); const sv = os.filter((o) => (o.ordered_at ?? o.created_at ?? '').startsWith(y)).map(savedOf).filter((x) => x != null).reduce((a, b) => a + b, 0); return `<div class="stat"><b style="color:var(--ok)">${sv ? usd(sv) : '–'}</b><small>saved vs SK ${y}</small></div>` })()}
   </div>
   ${S.media.length ? `<div class="sec"><span>Live from factories</span><span class="small muted" style="flex:none">${ago(S.media[0].created_at)}</span></div><div class="chips" style="gap:8px">${S.media.slice(0, 16).map((m) => `<div data-m="${m.id}" style="flex:none;width:84px;height:84px;border-radius:16px;overflow:hidden;position:relative;background:var(--card2);cursor:pointer">${m.kind === 'video' ? `<video src="${esc(m.url)}#t=0.5" muted playsinline preload="metadata" style="width:100%;height:100%;object-fit:cover"></video><span style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:22px">▶</span>` : `<img src="${esc(m.url)}" loading="lazy" style="width:100%;height:100%;object-fit:cover">`}</div>`).join('')}</div>` : ''}
   ${stuck.length ? `<div class="card" style="background:rgba(251,191,36,.08)"><b style="color:var(--warn)">${stuck.length} ${stuck.length === 1 ? 'parcel' : 'parcels'} not moving</b><div class="small muted">${stuck.map((o) => esc(o.title)).join(', ')} – no movement for 5+ days</div></div>` : ''}
@@ -546,7 +548,7 @@ function orderCard(o) {
       <div class="s">${G.STAGES[o.stage ?? 1]} · ${G.MODES[o.mode] ?? ''}${sup ? ' · ' + esc(sup.name) : o.supplier ? ' · ' + esc(o.supplier) : ''}</div>
       <div class="s">${last ? esc(last.d) + (last.loc ? ' · ' + esc(last.loc) : '') + ' · ' + ago(last.t) : o.tracking_no ? esc(o.tracking_no) : o.qty ? esc(o.qty) + (o.price ? ' · ' + money(o.price, o.currency) : '') : ''}</div>
       ${prog(o.stage ?? 1)}
-      <div style="margin-top:7px">${e && active(o) ? `<span class="tag acc">ETA ~${fmtD(e.d)}</span>` : ''}${landed(o)?.per ? `<span class="tag">${usd(landed(o).per)}/pc</span>` : ''}${o.paid && o.order_kind !== 'shipping' ? (o.invoice_status === 'received' ? '<span class="tag ok">invoice</span>' : '<span class="tag warn">no invoice</span>') : ''}</div>
+      <div style="margin-top:7px">${e && active(o) ? `<span class="tag acc">ETA ~${fmtD(e.d)}</span>` : ''}${landed(o)?.per ? `<span class="tag">${usd(landed(o).per)}/pc</span>` : ''}${o.paid && o.order_kind !== 'shipping' ? (o.invoice_status === 'received' ? '<span class="tag ok">invoice</span>' : '<span class="tag warn">no invoice</span>') : ''}${o.weight_flag ? '<span class="tag warn">⚖️ weight</span>' : ''}${o.ta_alert ? '<span class="tag warn">⏰ late</span>' : ''}${o.pi_check && o.pi_check.verdict !== 'ok' && !o.paid ? '<span class="tag warn">PI ⚠️</span>' : ''}${savedOf(o) > 0 ? `<span class="tag ok">−${usd(savedOf(o))} vs SK</span>` : ''}</div>
     </div></div>`
 }
 function placeCard(p) {
@@ -572,6 +574,7 @@ function openOrder(id) {
   ${e && active(o) ? `<div class="card" style="margin-top:10px"><b>Arrives ~${new Date(e.d).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'numeric' })}</b><div class="small muted">${esc(e.how)}${e.avg ? ' · avg ' + e.avg + ' days' : ''}</div></div>` : ''}
   ${(() => { const L = landed(o); return L ? `<div class="card" style="margin-top:10px"><b>${L.per ? usd(L.per) + ' per piece' : usd(L.total) + ' total'}</b> <span class="small muted">≈ ${eur(L.total * RATES.USD)} total</span><div class="small muted">goods ${usd(L.goods)} + shipping ${usd(L.ship)}${L.pcs ? ` · ${L.pcs} pcs · total ${usd(L.total)}` : ''}${L.ship ? '' : ' · add shipping cost in Edit'}${RATES.approx ? ' · approx. € rate' : ' · € at ECB rate ' + (RATES.date ?? '')}</div></div>` : '' })()}
   ${o.order_kind !== 'shipping' ? `<div class="card small" style="display:flex;align-items:center;gap:10px"><span style="flex:1">Invoice: <b>${{ none: o.paid ? 'not requested' : 'after payment', ask: 'agent will request', requested: 'requested ' + ago(o.invoice_requested_at), received: 'received ✅' }[o.invoice_status ?? 'none'] ?? o.invoice_status}</b>${o.invoice_sent_at ? `<div class="small muted">emailed to ${esc(o.invoice_sent_to ?? '')} · ${fmtD(o.invoice_sent_at)}</div>` : ''}</span>${o.invoice_url ? `<a class="btn sm ghost" target="_blank" href="${esc(o.invoice_url)}">Open</a>` : ''}${o.invoice_status === 'received' && !o.invoice_sent_at && S.agent?.company?.accountant_email ? `<a class="btn sm" href="mailto:${esc(S.agent.company.accountant_email)}?subject=${encodeURIComponent('Faktúra – ' + (placeById(o.supplier_id)?.name ?? o.supplier ?? '') + ' – ' + o.title)}&body=${encodeURIComponent('Dobrý deň,\n\nposielam faktúru k objednávke ' + o.title + (o.alibaba_no ? ' (Alibaba ' + o.alibaba_no + ')' : '') + ':\n' + (o.invoice_url ?? '') + '\n\nĎakujem')}">Email</a>` : ''}${o.invoice_status !== 'received' ? `<button class="btn sm ghost" id="oHave">I have it</button><button class="btn sm" id="oInv">${o.invoice_status === 'requested' ? 'Remind' : 'Request'}</button>` : ''}</div>` : ''}
+  ${orderExtras(o)}
   <dl class="kv" style="margin-top:12px">
     ${sup ? `<dt>Factory</dt><dd><a href="#" data-pl="${sup.id}">${esc(sup.name)}</a></dd>` : o.supplier ? `<dt>Supplier</dt><dd>${esc(o.supplier)}</dd>` : ''}
     ${ag ? `<dt>Agent</dt><dd><a href="#" data-pl="${ag.id}">${esc(ag.name)}</a></dd>` : ''}
@@ -605,6 +608,8 @@ function openOrder(id) {
     if ($('#oRef', b)) $('#oRef', b).onclick = async (e) => { e.target.textContent = '⏳'; try { const r = await fn({ action: 'refresh', ids: [o.id] }); toast(r.errors?.length ? '⚠️ ' + r.errors[0] : 'Updated ✅', 4000); await loadAll(); openOrder(o.id) } catch (err) { toast('❌ ' + err.message, 5000); e.target.textContent = 'Refresh tracking' } }
     $('#oEdit', b).onclick = () => openAdd(null, o)
     if ($('#oRe', b)) $('#oRe', b).onclick = () => reorder(o)
+    if ($('#oSk', b)) $('#oSk', b).onclick = async () => { const v = prompt('What would it cost in Slovakia? (EUR, all pieces)', o.sk_price ?? ''); if (v == null) return; const n = num(v); await sb.from('kargo_orders').update({ sk_price: n, sk_price_src: n ? 'you' : null, sk_note: null }).eq('id', o.id); await loadAll(); openOrder(o.id) }
+    if ($('#oWok', b)) $('#oWok', b).onclick = async () => { await sb.from('kargo_orders').update({ weight_flag: null }).eq('id', o.id); await loadAll(); openOrder(o.id) }
     if ($('#oHave', b)) $('#oHave', b).onclick = async () => { await haveInvoice(o.id); openOrder(o.id) }
     if ($('#oInv', b)) $('#oInv', b).onclick = async () => {
       if (!S.agent?.company?.name) { toast('Fill in your company details first (Agent → Company details)', 4000); return openCompany() }
@@ -709,6 +714,22 @@ const toEur = (v, c) => v == null ? 0 : Number(v) * (RATES[c || 'USD'] ?? 1)
 const toUsd = (v, c) => v == null ? 0 : (Number(v) * (RATES[c || 'USD'] ?? 1)) / RATES.USD
 const usd = (v) => v == null ? '–' : '$' + v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 2 : 0, minimumFractionDigits: v < 10 ? 2 : 0 })
 const piecesOf = (o) => Number(o.pieces) || Number(String(o.qty ?? '').replace(/[\s,]/g, '').match(/\d+/)?.[0]) || null
+// úspora oproti kúpe na Slovensku
+function savedOf(o) { const L = landed(o); if (!o.sk_price || !L?.total) return null; return toUsd(o.sk_price, 'EUR') - L.total }
+function orderExtras(o) {
+  const out = []
+  if (o.order_kind !== 'shipping') {
+    const sv = savedOf(o)
+    out.push(`<div class="card small"><div class="row"><span style="flex:1">In Slovakia: <b>${o.sk_price ? eur(Number(o.sk_price)) : '–'}</b>${o.sk_price_src === 'ai' ? ' <span class="muted">est.</span>' : ''}${sv != null ? ` · saved <b style="color:var(--ok)">${usd(sv)}</b>` : ''}${o.sk_note ? `<div class="muted">${esc(o.sk_note)}</div>` : ''}</span><button class="btn sm ghost" id="oSk" style="flex:none">${o.sk_price_src === 'you' ? 'Edit' : 'Set SK price'}</button></div></div>`)
+  }
+  if (o.weight_flag) out.push(`<div class="card small" style="background:rgba(239,68,68,.1)"><div class="row"><span style="flex:1">⚖️ <b>${esc(o.weight_flag)}</b></span><button class="btn sm ghost" id="oWok" style="flex:none">OK</button></div></div>`)
+  else if (o.weight_factory || o.weight_billed) out.push(`<div class="card small">⚖️ factory ${o.weight_factory ?? '–'} kg · agent ${o.weight_billed ?? '–'} kg${o.cbm ? ` · ${o.cbm} cbm` : ''}</div>`)
+  if (o.pi_check) { const c = o.pi_check; out.push(`<div class="aichk ${{ ok: 'ok', check: 'warn', bad: 'bad' }[c.verdict]}"><b>🧾 PI ${{ ok: '✅', check: '⚠️', bad: '❌' }[c.verdict]}</b> ${esc(c.line ?? '')}${(c.issues ?? []).map((x) => `<div>• ${esc(x)}</div>`).join('')}</div>`) }
+  if (o.ta_alert || (o.ship_by && (o.stage ?? 1) < 3)) out.push(`<div class="card small" style="${o.ta_alert ? 'background:rgba(251,191,36,.1)' : ''}">${o.ta_alert ? '⏰ <b>Late</b> – ' : ''}Ship by ${fmtD(o.ship_by)} (Trade Assurance)${o.ta_alert ? '<div class="muted">You can claim compensation in the order on Alibaba</div>' : ''}</div>`)
+  const sp = o.spec && Object.entries(o.spec).filter(([k, v]) => v && k !== 'images')
+  if (sp?.length) out.push(`<details class="card small" open><summary><b>Product card</b></summary><dl class="kv" style="margin:6px 0 0">${sp.map(([k, v]) => `<dt>${esc(k.replace('_', ' '))}</dt><dd>${esc(String(v))}</dd>`).join('')}</dl></details>`)
+  return out.join('')
+}
 function landed(o) {
   const goods = toUsd(o.price, o.currency) + toUsd(o.fees, o.currency)
   const ship = toUsd(o.ship_cost, o.currency)
@@ -866,9 +887,8 @@ function activeChats() {
         ${face(avatarOf(t), t.company || t.partner, 46)}
         <div style="flex:1;min-width:0">
           <div class="row" style="gap:6px"><b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.partner && t.company && t.kind === 'agent' ? t.partner : t.company || t.partner || 'Chat')}</b>${pend.has(t.id) ? `<span class="tag acc" style="flex:none">${pend.get(t.id)} to approve</span>` : lab ? `<span class="tag ${lab[1]}" style="flex:none">${lab[0]}</span>` : ''}</div>
-          <div class="small muted">${t.kind === 'agent' ? 'Shipping agent' + (t.company && t.partner ? ' · ' + esc(t.company) : '') : t.kind === 'supplier' ? 'Factory' : 'Chat'} · ${ago(t.last_at)}</div>
-          ${t.next_step ? `<div class="small" style="margin-top:6px">→ ${esc(t.next_step)}</div>` : t.last_text ? `<div class="small muted" style="margin-top:6px">${t.last_from_me ? 'You: ' : ''}${esc(t.last_text.slice(0, 110))}</div>` : ''}
-          ${(t.open_items ?? []).length ? `<div class="open">${t.open_items.map((x) => `<div>○ ${esc(x)}</div>`).join('')}</div>` : ''}
+          ${t.next_step ? `<div class="small" style="margin-top:3px">→ ${esc(t.next_step)}${(t.open_items ?? []).length ? `<span class="muted"> · ${t.open_items.map(esc).join(' · ')}</span>` : ''}</div>` : ''}
+          ${t.last_text ? `<div class="small muted" style="margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.last_from_me ? 'You: ' : ''}${esc(t.last_text.slice(0, 120))}</div>` : ''}
         </div>
       </div>
       ${os.length ? `<div class="chatords">${os.slice(0, 4).map((o) => { const ph = photoOf(o); return `<div class="co" data-o="${o.id}"><div class="cph" style="${ph ? `background-image:url('${esc(ph)}')` : ''}">${ph ? '' : ICO.fac}</div><div style="flex:1;min-width:0"><div class="small" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><b>${esc(o.title)}</b></div><div class="small muted">${G.STAGES[o.stage ?? 1]}${o.paid && o.order_kind !== 'shipping' && o.invoice_status !== 'received' ? ' · no invoice' : ''}</div>${prog(o.stage ?? 1)}</div></div>` }).join('')}</div>` : ''}
@@ -880,16 +900,18 @@ function activeChats() {
 }
 function draftCard(d) {
   const t = S.threads.find((x) => x.id === d.thread_id)
-  const msgs = (S.msgs?.[d.thread_id] ?? []).filter((m) => m.side !== 's').slice(-6)
+  const msgs = (S.msgs?.[d.thread_id] ?? []).filter((m) => m.side !== 's').slice(-10)
   const ord = t?.place_id ? S.orders.find((o) => (o.supplier_id === t.place_id || o.agent_id === t.place_id) && !o.archived) : null
   const photos = d.kind === 'photos' && (d.images ?? []).length
   const icon = ''
   return `<div class="card draft">
-    <div class="row" style="gap:10px;justify-content:flex-start">${face(avatarOf(t), d.to_name ?? t?.company, 34)}<div style="flex:3"><b>${esc(d.to_name ?? t?.company ?? '')}</b> ${{ photos: '<span class="tag acc">photos</span>', ready: '<span class="tag acc">goods ready</span>', invoice: '<span class="tag">invoice</span>', invoice_reminder: '<span class="tag">invoice</span>', reorder: '<span class="tag">reorder</span>', complaint: '<span class="tag warn">complaint</span>', rfq: '<span class="tag">new supplier</span>' }[d.kind] ?? ''}</div><span class="muted small" style="text-align:right">${d.channel === 'whatsapp' ? 'WhatsApp · ' : ''}${ago(d.created_at)}</span></div>
+    <div class="row" style="gap:10px;justify-content:flex-start">${face(avatarOf(t), d.to_name ?? t?.company, 34)}<div style="flex:3"><b>${esc(d.to_name ?? t?.company ?? '')}</b> ${{ photos: '<span class="tag acc">photos</span>', ready: '<span class="tag acc">goods ready</span>', invoice: '<span class="tag">invoice</span>', invoice_reminder: '<span class="tag">invoice</span>', reorder: '<span class="tag">reorder</span>', complaint: '<span class="tag warn">complaint</span>', rfq: '<span class="tag">new supplier</span>', pi: '<span class="tag acc">PI</span>' }[d.kind] ?? ''}</div><span class="muted small" style="text-align:right">${d.channel === 'whatsapp' ? 'WhatsApp · ' : ''}${ago(d.created_at)}</span></div>
     ${d.reason ? `<div class="why">${esc(d.reason)}</div>` : ''}
-    ${ord ? `<div class="row small" style="margin-top:8px;gap:8px;justify-content:flex-start;cursor:pointer" data-o="${ord.id}"><div style="width:30px;height:30px;border-radius:8px;flex:none;background:var(--card2) ${ord.image_url ? `url('${esc(ord.image_url)}') center/cover` : ''}"></div><span>Order: <b>${esc(ord.title)}</b></span></div>` : t?.place_id ? '' : '<div class="small muted" style="margin-top:6px">Not linked to an active order</div>'}
-    ${msgs.length ? `<div style="margin:10px 0;max-height:260px;overflow:auto;background:var(--bg);border-radius:14px;padding:6px 10px">${msgs.map((m) => `<div class="bub ${m.side}" style="font-size:13px">${esc((m.text ?? '').slice(0, 400))}${(m.imgs ?? []).length ? ' 📷' : ''}</div>`).join('')}</div>` : ''}
+    ${ord ? `<div class="row small" style="margin-top:8px;gap:8px;justify-content:flex-start;cursor:pointer" data-o="${ord.id}"><div style="width:30px;height:30px;border-radius:8px;flex:none;background:var(--card2) ${ord.image_url ? `url('${esc(ord.image_url)}') center/cover` : ''}"></div><b>${esc(ord.title)}</b></div>` : ''}
+    ${msgs.length ? `<div class="mini" style="margin:10px 0;max-height:300px;overflow:auto;background:var(--bg);border-radius:14px;padding:6px 10px">${bubbles(msgs)}</div>` : ''}
+    ${t ? `<button class="btn ghost sm" data-th="${t.id}" style="width:100%;margin-bottom:8px">Open full chat</button>` : ''}
     ${photos ? `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:10px 0">${d.images.map((u) => `<a href="${esc(u)}" target="_blank"><img src="${esc(u)}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;background:var(--card2)"></a>`).join('')}</div>` : !msgs.length && t?.last_text && !t.last_from_me ? `<div class="them">${esc(t.last_text.slice(0, 400))}</div>` : ''}
+    ${d.check_result ? (() => { const c = d.check_result; const V = (c.kind === 'pi' ? { ok: ['🧾 PI ✅ matches', 'ok'], check: ['🧾 PI ⚠️ check', 'warn'], bad: ['🧾 PI ❌ do not pay', 'bad'] } : { ok: ['✅ AI: looks right', 'ok'], check: ['⚠️ AI: check', 'warn'], bad: ['❌ AI: problem', 'bad'] })[c.verdict] ?? ['AI', '']; return `<div class="aichk ${V[1]}"><b>${V[0]}</b>${c.seen || c.line ? ` <span class="muted">· ${esc(c.seen ?? c.line)}</span>` : ''}${(c.issues ?? []).map((x) => `<div>• ${esc(x)}</div>`).join('')}</div>` })() : ''}
     <textarea id="dt-${d.id}">${esc(d.text)}</textarea>
     <div class="row" style="margin-top:8px">
       <button class="btn bad sm" data-no="${d.id}" style="flex:.7">✕</button>
@@ -917,12 +939,14 @@ async function decide(id, st, quiet = false) {
 }
 function quoteCard(q) {
   const kg = Number(q.weight_kg) || null
-  const val = (o) => o.total ?? (o.price_kg && kg ? o.price_kg * kg : o.price_kg ?? 1e9)
+  const val = (o) => o.full?.total ?? o.total ?? (o.price_kg && kg ? o.price_kg * kg : 1e9)
   const offs = [...(q.offers ?? [])].sort((a, b) => val(a) - val(b))
   const names = (q.agents ?? []).map((id) => placeById(id)?.name).filter(Boolean)
-  return `<div class="card"><div class="row"><b>${esc(q.title)}</b><span class="small muted" style="text-align:right">${q.weight_kg ? q.weight_kg + ' kg' : ''}${q.cbm ? ' · ' + q.cbm + ' cbm' : ''} · ${G.MODES[q.mode] ?? ''}</span></div>
-  <div class="small muted">${offs.length}/${names.length} replies · ${esc(names.join(', '))}</div>
-  ${offs.length ? `<table class="qtab"><tr><th>Agent</th><th>/kg</th><th>Total</th><th>Days</th><th></th></tr>${offs.map((o, i) => `<tr class="${i === 0 ? 'best' : ''}"><td>${i === 0 ? '🏆 ' : ''}${esc(o.agent ?? '')}</td><td>${o.price_kg ?? '–'}</td><td>${o.total ?? (o.price_kg && kg ? Math.round(o.price_kg * kg) : '–')}</td><td>${esc(o.days ?? '')}${o.ddp === false ? ' no DDP' : ''}</td><td>${q.winner === o.place_id ? '✅' : q.status === 'asking' ? `<button class="btn sm ok" data-qw="${q.id}" data-pl="${o.place_id}">Pick</button>` : ''}</td></tr>`).join('')}</table>` : '<div class="small muted" style="margin-top:6px">Waiting for replies…</div>'}
+  const ord = q.order_id ? S.orders.find((o) => o.id === q.order_id) : null
+  return `<div class="card">${ord ? `<div class="row small" style="gap:8px;justify-content:flex-start;margin-bottom:6px" data-o="${ord.id}"><i style="width:28px;height:28px;flex:none;border-radius:8px;background:var(--card2) ${photoOf(ord) ? `url('${esc(photoOf(ord))}') center/cover` : ''}"></i><b>📦 ${esc(ord.title)}</b></div>` : ''}
+  <div class="row"><b>${ord ? 'Which agent?' : esc(q.title)}</b><span class="small muted" style="text-align:right">${q.weight_kg ? q.weight_kg + ' kg' : '? kg'}${q.cbm ? ' · ' + q.cbm + ' cbm' : ''}${q.cartons ? ' · ' + q.cartons + ' ctn' : ''}</span></div>
+  <div class="small muted">${offs.length}/${names.length} replied · ${esc(names.join(', '))}</div>
+  ${offs.length ? `<table class="qtab"><tr><th>Agent</th><th>All-in</th><th>/kg</th><th>Fees</th><th>Transfer</th><th>Days</th><th></th></tr>${offs.map((o, i) => `<tr class="${i === 0 ? 'best' : ''}"><td>${i === 0 ? '🏆 ' : ''}${esc(o.agent ?? '')}</td><td><b>${o.full?.total ? '$' + Math.round(o.full.total) : o.total ?? '–'}</b></td><td>${o.price_kg ?? '–'}</td><td title="${esc((o.fees ?? []).map((f) => f.name + ' ' + f.amount).join(', '))}">${o.full?.hidden ? '$' + Math.round(o.full.hidden) : (o.fees ?? []).length ? '?' : '0'}</td><td>${o.full?.transfer != null ? '$' + o.full.transfer : '?'}</td><td>${esc(o.days ?? '')}${o.ddp === false ? ' ⚠️' : ''}</td><td>${q.winner === o.place_id ? '✅' : q.status === 'asking' ? `<button class="btn sm ok" data-qw="${q.id}" data-pl="${o.place_id}">Pick</button>` : ''}</td></tr>`).join('')}</table>${offs.some((o) => (o.fees ?? []).length) ? `<div class="small muted" style="margin-top:4px">Fees: ${offs.filter((o) => (o.fees ?? []).length).map((o) => esc(o.agent) + ' – ' + o.fees.map((f) => esc(f.name) + ' $' + f.amount).join(', ')).join(' · ')}</div>` : ''}` : '<div class="small muted" style="margin-top:6px">Waiting for replies…</div>'}
   ${q.status === 'asking' ? `<button class="btn sm ghost" data-qx="${q.id}" style="margin-top:8px">Cancel</button>` : ''}</div>`
 }
 function newQuote(pre = {}) {
@@ -952,32 +976,58 @@ async function pickWinner(qid, pid) {
   const th = S.threads.find((t) => t.place_id === pid)
   const wa = p?.whatsapp || p?.phone
   await sb.from('kargo_drafts').insert({ quote_id: qid, thread_id: wa ? null : th?.id ?? null, channel: wa ? 'whatsapp' : 'alibaba', to_phone: wa ?? null, to_name: p?.name, reason: 'Confirm winning quote', text: `ok, lets go with ${o?.price_kg ? o.price_kg + '/kg' : 'your price'} DDP. send me warehouse address and shipping mark pls` })
-  toast('Picked – confirmation message awaits approval'); await loadAll(); renderMsg()
+  toast(q.order_id ? 'Picked – confirmation + factory address await approval' : 'Picked – confirmation awaits approval'); await loadAll(); renderMsg()
+}
+// skutočný chat – presne čo prišlo a čo si poslal (fotky, súbory), na kontrolu
+function bubbles(msgs) {
+  return msgs.map((m) => {
+    if (m.side === 's') return `<div class="bub s">${esc(m.text ?? '')}</div>`
+    const imgs = (m.imgs ?? []).map((u) => `<a href="${esc(u)}" target="_blank"><img src="${esc(u)}" loading="lazy"></a>`).join('')
+    const files = (m.links ?? []).filter((u) => !/alibaba\.com\/(product|company)/.test(u)).map((u) => `<a class="file" href="${esc(u)}" target="_blank">📎 ${esc(decodeURIComponent(u.split('?')[0].split('/').pop() || 'file').slice(0, 40))}</a>`).join('')
+    return `<div class="bub ${m.side}">${m.text ? esc(m.text) : ''}${imgs ? `<div class="bimgs">${imgs}</div>` : ''}${files}</div>`
+  }).join('')
 }
 async function openThread(id) {
   const { data: t } = await sb.from('kargo_threads').select('*').eq('id', id).single()
   if (!t) return
-  sheet(`<div class="row" style="gap:12px;justify-content:flex-start">${face(avatarOf(t), t.company || t.partner, 56)}<div style="flex:1"><h2 style="margin:4px 0">${esc(t.company || t.partner)}</h2></div></div>
-  ${t.next_step || (t.open_items ?? []).length ? `<div class="card small">${t.next_step ? `<b>→ ${esc(t.next_step)}</b>` : ''}${(t.open_items ?? []).length ? `<div class="open">${t.open_items.map((x) => `<div>○ ${esc(x)}</div>`).join('')}</div>` : ''}</div>` : ''}<div class="muted small">${esc(t.partner ?? '')} · ${{ supplier: 'supplier', agent: 'agent', cold: 'cold outreach', other: 'other', unknown: '?' }[t.kind]}${t.archived ? ' · archived' : ''}</div>
-  ${t.summary ? `<div class="card small">🧠 ${esc(t.summary)}</div>` : ''}
-  <div style="margin-top:8px">${(t.messages ?? []).slice(-40).map((m) => `<div class="bub ${m.side}">${esc(m.text)}</div>`).join('')}</div>
-  <div class="sec"><span>Write (the agent sends it)</span></div>
-  <textarea class="in" id="tW" placeholder="your message…"></textarea>
-  <div class="row" style="margin-top:8px"><select class="in" id="tK">${['supplier', 'agent', 'cold', 'other'].map((k) => `<option value="${k}" ${t.kind === k ? 'selected' : ''}>${{ supplier: 'supplier', agent: 'agent', cold: 'cold outreach (ignore)', other: 'other' }[k]}</option>`).join('')}</select><button class="btn" id="tSend">Send</button></div>`, (b) => {
+  const msgs = t.messages ?? []
+  const ords = t.place_id ? S.orders.filter((o) => active(o) && (o.supplier_id === t.place_id || o.agent_id === t.place_id)) : []
+  sheet(`<div class="row" style="gap:12px;justify-content:flex-start">${face(avatarOf(t), t.company || t.partner, 48)}<div style="flex:1;min-width:0"><b style="font-size:18px">${esc(t.kind === 'agent' && t.partner ? t.partner : t.company || t.partner)}</b><div class="small muted">${esc(t.kind === 'agent' && t.partner ? t.company ?? '' : t.partner ?? '')}</div></div></div>
+  ${t.next_step ? `<div class="small" style="margin-top:10px">→ <b>${esc(t.next_step)}</b>${(t.open_items ?? []).length ? ' · ' + t.open_items.map(esc).join(' · ') : ''}</div>` : ''}
+  ${ords.length ? `<div class="chips" style="margin-top:10px;gap:8px">${ords.map((o) => { const ph = photoOf(o); return `<span class="chip" data-o="${o.id}" style="gap:6px">${ph ? `<i style="width:22px;height:22px;border-radius:6px;background:url('${esc(ph)}') center/cover"></i>` : ''}${esc(o.title)}</span>` }).join('')}</div>` : ''}
+  <div class="row" style="margin-top:10px"><button class="btn ghost sm" id="tFull">${t.full_at ? 'Reload chat' : 'Load full chat'}</button><a class="btn ghost sm" href="https://message.alibaba.com/message/messenger.htm" target="_blank">Alibaba ↗</a></div>
+  <div class="small muted" style="margin-top:6px">${msgs.length} messages${t.full_at ? ' · full ' + ago(t.full_at) : ''}</div>
+  <div id="tMsgs" style="margin-top:6px">${bubbles(msgs) || '<div class="muted small">No messages loaded yet.</div>'}</div>
+  <textarea class="in" id="tW" placeholder="Write – agent sends it" style="margin-top:10px"></textarea>
+  <div class="row" style="margin-top:8px"><select class="in" id="tK" style="flex:.8">${['supplier', 'agent', 'cold', 'other'].map((k) => `<option value="${k}" ${t.kind === k ? 'selected' : ''}>${{ supplier: 'Factory', agent: 'Agent', cold: 'Ignore (cold)', other: 'Other' }[k]}</option>`).join('')}</select><button class="btn" id="tSend">Send</button></div>`, (b) => {
     $('#sheet .pan').scrollTop = 1e6
+    $$('[data-o]', b).forEach((c) => (c.onclick = () => openOrder(c.dataset.o)))
+    $('#tFull', b).onclick = async (e) => {
+      e.target.disabled = true; e.target.textContent = 'Loading…'
+      await sb.from('kargo_agent').upsert({ owner: S.user.id, command: 'thread:' + t.ext_id, command_at: new Date().toISOString() }, { onConflict: 'owner' })
+      if (!agentOnline()) { toast('PC agent offline – loads when back'); return }
+      const was = t.full_at
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 4000))
+        if ($('#sheet').classList.contains('hide')) return
+        const { data: n } = await sb.from('kargo_threads').select('full_at').eq('id', t.id).single()
+        if (n?.full_at && n.full_at !== was) { await loadAll(); return openThread(t.id) }
+      }
+      e.target.disabled = false; e.target.textContent = 'Load full chat'
+    }
     $('#tK', b).onchange = async () => {
       const kind = $('#tK', b).value
       const patch = { kind }
       if ((kind === 'agent' || kind === 'supplier') && !t.place_id) {
-        const { data: pl } = await sb.from('kargo_places').insert({ kind, name: t.company || t.partner, contact: t.partner, note: t.summary ?? null }).select().single()
-        if (pl) { patch.place_id = pl.id; toast(kind === 'agent' ? 'Agent added – set warehouse city & fees' : 'Factory added'); await sb.from('kargo_threads').update(patch).eq('id', t.id); await loadAll(); return editPlace(pl) }
+        const { data: pl } = await sb.from('kargo_places').insert({ kind, name: t.company || t.partner, contact: t.partner, avatar: t.avatar ?? null, note: t.summary ?? null }).select().single()
+        if (pl) { patch.place_id = pl.id; toast(kind === 'agent' ? 'Agent added – set city & fees' : 'Factory added'); await sb.from('kargo_threads').update(patch).eq('id', t.id); await loadAll(); return editPlace(pl) }
       }
       await sb.from('kargo_threads').update(patch).eq('id', t.id); toast('Saved'); loadAll()
     }
     $('#tSend', b).onclick = async () => {
       const txt = $('#tW', b).value.trim(); if (!txt) return
-      await sb.from('kargo_drafts').insert({ thread_id: t.id, to_name: t.company || t.partner, text: txt, status: 'approved', decided_at: new Date().toISOString(), reason: 'Written by you' })
-      closeSheet(); toast('The agent will send it'); pollLight()
+      await sb.from('kargo_drafts').insert({ thread_id: t.id, to_name: t.company || t.partner, text: txt, status: 'approved', decided_at: new Date().toISOString(), reason: 'You' })
+      closeSheet(); toast('Agent sends it'); pollLight()
     }
   })
 }
@@ -1017,6 +1067,8 @@ function renderSrc() {
     else await sb.from('kargo_places').update({ vet_status: 'ask' }).eq('id', p.id)
     toast('Checking ' + x.supplier + ' – you’ll get a push'); loadAll()
   }))
+  $$('[data-rqnew]', v).forEach((b) => (b.onclick = async () => { await sb.from('kargo_requests').update({ rfq_status: 'draft', rfq: null }).eq('id', b.dataset.rqnew); toast(agentOnline() ? 'Agent writes the RFQ – approve it here' : 'Agent writes it when your PC is on'); await loadAll(); renderSrc() }))
+  $$('[data-rqok]', v).forEach((b) => (b.onclick = async () => { const id = b.dataset.rqok; const rfq = { title: $('#rqT-' + id).value.trim(), qty: num($('#rqQ-' + id).value), unit: $('#rqU-' + id).value.trim(), text: $('#rqX-' + id).value.trim() }; await sb.from('kargo_requests').update({ rfq, rfq_status: 'approved' }).eq('id', id); toast('Agent posts it on Alibaba'); await loadAll(); renderSrc() }))
   $$('[data-rdel]', v).forEach((b) => (b.onclick = async () => { await sb.from('kargo_requests').delete().eq('id', b.dataset.rdel); S.reqs = S.reqs.filter((r) => r.id !== b.dataset.rdel); renderSrc() }))
 }
 function reqCard(r) {
@@ -1037,7 +1089,8 @@ function reqCard(r) {
         <div class="row" style="margin-top:6px;justify-content:flex-start"><input type="checkbox" class="rsel" data-r="${r.id}" value="${i}" ${i < 3 ? 'checked' : ''} style="width:20px;height:20px;flex:none"><a href="${esc(x.url)}" target="_blank" class="small" style="flex:none">Open ↗</a><a href="#" class="small" data-vet="${r.id}:${i}" style="flex:none;margin-left:12px">Check factory</a></div>
       </div></label>`).join('')}
     ${bad.length ? `<details style="margin-top:10px"><summary class="small muted">Failed quality filter (${bad.length})</summary>${bad.map((x) => `<div class="small" style="margin-top:6px"><b>${x.unit_price ?? ''} $</b> ${esc(x.supplier ?? '')} – <span class="muted">${esc(x.reject_reason ?? '')}</span></div>`).join('')}</details>` : ''}
-    <div class="row" style="margin-top:12px">${ok.length ? `<button class="btn acc sm" data-rfq="${r.id}" style="flex:2">Message selected</button>` : ''}<button class="btn ghost sm" data-rdel="${r.id}">Delete</button></div>
+    ${r.rfq_status === 'review' && r.rfq ? `<div class="card small" style="margin-top:12px;background:var(--card2)"><b>📢 RFQ for Alibaba</b><input class="in" id="rqT-${r.id}" value="${esc(r.rfq.title ?? '')}" style="margin-top:6px"><div class="row"><input class="in" id="rqQ-${r.id}" value="${esc(r.rfq.qty ?? '')}" inputmode="numeric"><input class="in" id="rqU-${r.id}" value="${esc(r.rfq.unit ?? 'pieces')}"></div><textarea class="in" id="rqX-${r.id}">${esc(r.rfq.text ?? '')}</textarea><button class="btn ok sm" data-rqok="${r.id}" style="width:100%;margin-top:6px">Post RFQ</button></div>` : r.rfq_status ? `<div class="small muted" style="margin-top:10px">📢 RFQ: ${{ draft: 'agent is writing it…', approved: 'posting…', posting: 'posting…', posted: 'posted ' + ago(r.rfq_posted_at) + ' – offers come to Chats', failed: 'failed – try again' }[r.rfq_status] ?? r.rfq_status}</div>` : ''}
+    <div class="row" style="margin-top:12px">${ok.length ? `<button class="btn acc sm" data-rfq="${r.id}" style="flex:2">Message selected</button>` : ''}${!r.rfq_status || r.rfq_status === 'failed' ? `<button class="btn ghost sm" data-rqnew="${r.id}">RFQ</button>` : ''}<button class="btn ghost sm" data-rdel="${r.id}">Delete</button></div>
   </div>`
 }
 async function rfq(rid) {
@@ -1077,6 +1130,7 @@ function renderAgent() {
   v.innerHTML = `
   <div class="card"><div class="row"><b><span class="dot ${on ? 'on' : ''}"></span> ${on ? (a.paused ? 'Paused' : 'Running on your PC') : 'Offline'}</b><span class="small muted" style="text-align:right">${a.online_at ? ago(a.online_at) : 'never ran'}</span></div>
   <div style="margin-top:6px">${esc(a.status ?? 'Start Kargo Agent on your PC (guide below).')}</div></div>
+  ${(() => { const h = a.health; if (!h) return ''; const bad = [...(h.bad ?? []).map((b) => b.job + ': ' + b.err), ...(h.test?.problems ?? [])]; return `<div class="card small" style="${bad.length ? 'background:rgba(251,191,36,.08)' : ''}"><div class="row"><b>${bad.length ? '⚠️ Problem' : '✅ Health OK'}</b><button class="btn sm ghost" data-cmd="selftest" style="flex:none">Test now</button></div>${bad.length ? bad.map((x) => `<div class="muted" style="margin-top:4px">${esc(x)}</div>`).join('') : `<div class="muted">Checked ${ago(h.test?.at ?? h.checked_at)}</div>`}</div>` })()}
   <div style="position:relative">${a.live_url || a.live_key ? `<img class="live" id="liveImg" src="${esc(a.live_url ?? '')}" alt="Agent screen">` : ''}<span id="liveBadge" class="tag hide" style="position:absolute;top:10px;left:10px;background:#ef4444;color:#fff;font-weight:700">● LIVE</span></div>
   <div class="small muted" style="margin:4px 2px">${on ? 'Live while this screen is open' : ''}</div>
   <div class="row" style="margin-top:10px;flex-wrap:wrap">

@@ -65,6 +65,7 @@ nav button.on{color:var(--tx);background:rgba(255,255,255,.07)}
 .mapbar .sep{width:1px;background:var(--line);margin:4px 2px;flex:none}
 .mk{width:38px;height:38px;border-radius:50%;border:2.5px solid #fff;background:#222 center/cover;box-shadow:0 4px 14px rgba(0,0,0,.35);cursor:pointer;display:flex;align-items:center;justify-content:center;color:#fff}
 .mk.agent{width:30px;height:30px;background:#111;border:2px solid var(--blue)}
+.mk.agent.face{width:36px;height:36px;background-size:cover;background-position:center}
 .mk.home{width:16px;height:16px;background:var(--ok);border:3px solid #fff}
 .mk.fac{background:#2a2a30}
 .veh{width:34px;height:34px;border-radius:50%;background:var(--route);display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 6px color-mix(in srgb,var(--route) 25%,transparent),0 6px 18px rgba(0,0,0,.4);cursor:pointer;color:#fff}
@@ -118,6 +119,12 @@ nav button.on{color:var(--tx);background:rgba(255,255,255,.07)}
 .bub{max-width:82%;padding:9px 12px;border-radius:18px;margin:5px 0;font-size:14px;white-space:pre-wrap;word-break:break-word}
 .bub.me{background:var(--acc);color:#fff;margin-left:auto;border-bottom-right-radius:6px}
 .bub.them{background:var(--card2);border-bottom-left-radius:6px}
+.bub .bimgs{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:6px}
+.bub .bimgs img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:block;background:var(--card2)}
+.bub .file{display:block;margin-top:6px;padding:6px 9px;border-radius:9px;background:rgba(0,0,0,.25);color:inherit;text-decoration:none;font-size:12.5px}
+.aichk{margin:8px 0;padding:9px 12px;border-radius:12px;background:var(--card2);font-size:13px;line-height:1.5}
+.aichk.ok{background:rgba(52,211,153,.1)}.aichk.warn{background:rgba(251,191,36,.1)}.aichk.bad{background:rgba(239,68,68,.12)}
+.mini .bub{font-size:13px}
 .bub.s{background:none;color:var(--mut);font-size:11.5px;text-align:center;margin:6px auto}
 .live{width:100%;border-radius:18px;background:#000;display:block;min-height:120px}
 .log{font-size:13px;max-height:260px;overflow:auto;padding:6px 16px}
